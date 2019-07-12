@@ -129,6 +129,15 @@ AC_ARG_ENABLE([driver-android],
 
 AM_CONDITIONAL([BUILD_DRIVER_ANDROID], [test "x$driver_android_enabled" != "xno"])
 
+# Serial Driver
+AC_ARG_ENABLE([driver-serial],
+        [AS_HELP_STRING([--disable-driver-serial],
+                [disable building of Serial driver [default=yes]])],
+        [driver_serial_enabled=$enableval],
+        [driver_serial_enabled='yes'])
+
+AM_CONDITIONAL([BUILD_DRIVER_SERIAL], [test "x$driver_serial_enabled" != "xno"])
+
 # Libs required by Oculus Rift Driver
 AS_IF([test "x$driver_oculus_rift_enabled" != "xno"],
 	[PKG_CHECK_MODULES([hidapi], [$hidapi] >= 0.0.5)])

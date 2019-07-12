@@ -143,6 +143,13 @@ if _drivers.contains('android')
 	c_args += '-DDRIVER_ANDROID'
 endif
 
+if _drivers.contains('serial')
+	sources += [
+		'src/drv_serial/serial.c',
+	]
+	c_args += '-DDRIVER_SERIAL'
+endif
+
 openhmd_lib = library(
 	'openhmd',
 	sources,
