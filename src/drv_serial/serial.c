@@ -65,8 +65,9 @@ static void update_device(ohmd_device* device)
 
 	priv->buffer[priv->length]= '\0';
 
-//	next=strchr(priv->buffer,'\r');
-	next=strchr(priv->buffer,'\n');
+	next=strchr(priv->buffer,'\r');
+	if( next == NULL )
+		next=strchr(priv->buffer,'\n');
 	if( next != NULL )
 	{
 
