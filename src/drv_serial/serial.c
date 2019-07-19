@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <termios.h>
 #include <unistd.h>
 #include "../openhmdi.h"
 #include "string.h"
@@ -21,7 +20,17 @@
 
 #define PORT "/dev/Relativty"
 
-#define BAUD B115200
+
+#ifndef WIN32
+#include <termios.h>
+#define BAUD_RATE B115200
+#else // ! WIN32
+#warning you are builing on/for windows, mind your step!
+#include <windows.h>
+#define BAUD_RATE 115200
+#define O_NOCTTY 0
+#define O_NONBLOCK 0
+#endif // ! WIN32
 
 
 typedef struct
@@ -29,10 +38,18 @@ typedef struct
 	ohmd_device	 base;
 	fusion		 sensor_fusion;
 	int		 fd;
+#ifdef BAUD_RATE
+#ifndef WIN32
 	struct termios	 settings;
+#else // ! WIN32
+	HANDLE		 fh;
+	DCB		 settings;
+#endif // ! WIN32
+#endif // BAUD_RATE
 	char		 buffer[256];
 	int		 length;
 } serial_priv;
+
 
 static void update_device(ohmd_device* device)
 {
@@ -45,8 +62,7 @@ static void update_device(ohmd_device* device)
 
 	if( priv->fd < 0 )
 	{
-//		ohmd_set_error( priv->base.ctx, "File descriptor closed? '%s': %s.", PORT, strerror(errno));
-		LOGE( "File descriptor closed? '" PORT "'.");
+		LOGE( "File descriptor for '%s' closed? %s", PORT, strerror(errno));
 		return;
 	}
 
@@ -58,8 +74,7 @@ static void update_device(ohmd_device* device)
 	}
 	else if( errno != EAGAIN )
 	{
-//		ohmd_set_error( priv->base.ctx, "Can not read file '%s': %s.", PORT, strerror(errno));
-		LOGE( "Can not read file '" PORT "'.");
+		LOGE( "Can not read file '%s': %s", PORT, strerror(errno));
 		return;
 	}
 
@@ -143,13 +158,19 @@ static void close_device(ohmd_device* device)
 
 	LOGD("closing serial device");
 
-#ifdef BAUD
+#ifdef BAUD_RATE
+#ifndef WIN32
 	if( tcsetattr(priv->fd,TCSANOW,&priv->settings) < 0 )
 	{
-//		ohmd_set_error( priv->base.ctx, "Can not reset file attributes '%s': %s.", PORT, strerror(errno));
-		LOGW( "Can not reset file attributes '" PORT "'.");
+		LOGW( "Can not reset file attributes for '%s': %s", PORT, strerror(errno));
 	}
-#endif // BAUD
+#else // ! WIN32
+	if( ! SetCommState(priv->fh,&priv->settings) )
+	{
+		LOGW( "Can not set serial attributes '%s': %s", PORT, strerror(errno));
+	}
+#endif // ! WIN32
+#endif // BAUD_RATE
 
 	if( priv->fd > 0 )
 	{
@@ -168,60 +189,106 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 	if( ! priv )
 		return NULL;
 
-
 	priv->fd= open( desc->path, O_RDONLY | O_NOCTTY | O_NONBLOCK);
 	if( priv->fd < 0 )
 	{
-//		ohmd_set_error( priv->base.ctx, "Can not open file '%s': %s.", PORT, strerror(errno));
-		LOGD( "Can not open file '" PORT "'.");
+		LOGE( "Can not open file '%s': %s", PORT, strerror(errno));
 		free( priv);
 		priv= NULL;
 	}
 	else
 	{
 
+#ifdef BAUD_RATE
+#ifndef WIN32
 
-#ifdef BAUD
 		struct termios		 settings;
 
 
 		if( tcgetattr(priv->fd,&priv->settings) < 0 )
 		{
-//			ohmd_set_error( priv->base.ctx, "Can not get file attributes '%s': %s.", PORT, strerror(errno));
-			LOGD( "Can not get file attributes '" PORT "'.");
+			LOGW( "Can not get serial attributes for '%s': %s", PORT, strerror(errno));
 		}
 		else
 		{
 
 			settings= priv->settings;
 
-//			settings.c_cflag |= BAUD;
+
+			// convert break to null byte, no CR to NL translation,  no NL to CR translation, don't mark parity errors or breaks, no input parity check, don't strip high bit off, no XON/XOFF software flow control
+
+			settings.c_iflag &= ~(IGNBRK | BRKINT | ICRNL | INLCR | PARMRK | INPCK | ISTRIP | IXON);
+
+
+			// no CR to NL translation, no NL to CR-NL translation, no NL to CR translation, no column 0 CR suppression, no fill characters, no case mapping, no local output processing
+
+			settings.c_oflag &= ~(OCRNL | ONLCR | ONLRET | ONOCR | OFILL | OLCUC | OPOST);
+//			settings.c_oflag = 0;
+
+
+			// echo off, echo newline off, canonical mode off, extended input processing off, signal chars off
+
+			settings.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
+
+
+			// clear current char size mask, no parity checking, no output processing, one stop bit, force 8 bit input
+
+			settings.c_cflag &= ~(CSIZE | CSTOPB | PARENB);
+			settings.c_cflag |= CS8;
+
+			// non-POSIX ways...
+//			settings.c_cflag &= ~CBAUD;
+//			settings.c_cflag |= BAUD_RATE;
 //			settings.c_cflag &= ~CBAUD;
 //			settings.c_cflag |= CBAUDEX | B0;
-			cfsetispeed( &settings, BAUD);
-			cfsetospeed( &settings, BAUD);
 
-			settings.c_iflag &= ~ICRNL;
+			if( cfsetispeed(&settings,BAUD_RATE) < 0 )
+				LOGE( "Can not set incomming baudrate for '%s': %s", PORT, strerror(errno));
+			if( cfsetospeed( &settings, BAUD_RATE) < 0 )
+				LOGW( "Can not set outgoing baudrate for '%s': %s", PORT, strerror(errno));
+
 
 			if( tcsetattr(priv->fd,TCSANOW,&settings) < 0 )
-			{
-//				ohmd_set_error( priv->base.ctx, "Can not set file attributes '%s': %s.", PORT, strerror(errno));
-				LOGD( "Can not set file attributes '" PORT "'.");
-			}
+				LOGW( "Can not set serial attributes for '%s': %s", PORT, strerror(errno));
 
 			if( tcflush(priv->fd,TCOFLUSH) < 0 )
+				LOGW( "Can not flush termios '%s': %s", PORT, strerror(errno));
+		}
+
+#else // ! WIN32
+
+		DCB			 settings;
+
+
+		priv->fh= (HANDLE)_get_osfhandle( priv->fd);
+
+		if( ! GetCommState(priv->fh,&priv->settings) )
+		{
+			LOGW( "Can not get serial attributes for '%s': %s", PORT, strerror(errno));
+		}
+		else
+		{
+
+			settings= priv->settings;
+
+			settings.Parity = NOPARITY;
+			settings.BaudRate = BAUD_RATE;
+			settings.ByteSize = 8;
+			settings.StopBits = ONESTOPBIT;
+
+			if( ! SetCommState(priv->fh,&settings) )
 			{
-//				ohmd_set_error( priv->base.ctx, "Can not flush file attributes '%s': %s.", PORT, strerror(errno));
-				LOGD( "Can not flush termios '" PORT "'.");
+				LOGW( "Can not set serial attributes for '%s': %s", PORT, strerror(errno));
 			}
 		}
-#endif // BAUD
 
+#endif // ! WIN32
+#endif // BAUD_RATE
 
 		priv->length= 0;
 		priv->buffer[priv->length]='\0';
 
-		// Set default device properties
+		// Set default device settings
 		ohmd_set_default_device_properties(&priv->base.properties);
 
 		// Set device properties
