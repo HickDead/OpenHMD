@@ -109,5 +109,13 @@ libopenhmd_la_CPPFLAGS += -DDRIVER_ANDROID
 libopenhmd_la_LDFLAGS += -landroid
 endif
 
+if BUILD_DRIVER_SERIAL
+
+libopenhmd_la_SOURCES += \
+	drv_serial/serial.c
+libopenhmd_la_CPPFLAGS += -DDRIVER_SERIAL
+endif
+
+
 libopenhmd_la_LDFLAGS += $(EXTRA_LD_FLAGS)
 
