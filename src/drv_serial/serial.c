@@ -18,7 +18,7 @@
 #include "string.h"
 
 
-#define PORT "/dev/Relativty"
+#define PORT "com5"
 
 
 #ifndef WIN32
@@ -97,9 +97,9 @@ static void update_device(ohmd_device* device)
 //		next+= strspn( next, "\r\n");
 		next+= strcspn( next, "-0.123456789");
 		priv->length= strlen( next);
-//		for( number=0; number < priv->length; number++ )
-//			priv->buffer[number]= next[number];
-		memmove( &priv->buffer, &next, priv->length);
+		for( number=0; number < priv->length; number++ )
+			priv->buffer[number]= next[number];
+//		memmove( &priv->buffer, &next, priv->length);
 		priv->buffer[priv->length]= '\0';
 	}
 }
@@ -184,20 +184,37 @@ static void close_device(ohmd_device* device)
 static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 {
 
-
 	serial_priv* priv = ohmd_alloc(driver->ctx, sizeof(serial_priv));
 	if( ! priv )
 		return NULL;
 
-	priv->fd= open( desc->path, O_RDONLY | O_NOCTTY | O_NONBLOCK);
+#ifndef WIN32
+
+	priv->fd= open( desc->path, O_RDONLY | O_NOCTTY | O_NONBLOCK | O_NDELAY);
 	if( priv->fd < 0 )
 	{
-		LOGE( "Can not open file '%s': %s", PORT, strerror(errno));
+		LOGE( "Can not open file '%s': %s", desc->path, strerror(errno));
 		free( priv);
 		priv= NULL;
 	}
 	else
 	{
+
+// add flock() ?
+// if( flock(priv->fd,LOCK_EX|LOCK_NB) < 0 ) perror();
+#else // ! WIN32
+
+	priv->fd= open( desc->path, O_RDONLY | O_NOCTTY | O_NONBLOCK);
+	if( priv->fd < 0 )
+	{
+		LOGE( "Can not open file '%s': %s", desc->path, strerror(errno));
+		free( priv);
+		priv= NULL;
+	}
+	else
+	{
+
+#endif // ! WIN32
 
 #ifdef BAUD_RATE
 #ifndef WIN32
@@ -207,7 +224,7 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 
 		if( tcgetattr(priv->fd,&priv->settings) < 0 )
 		{
-			LOGW( "Can not get serial attributes for '%s': %s", PORT, strerror(errno));
+			LOGW( "Can not get serial attributes for '%s': %s", desc->path, strerror(errno));
 		}
 		else
 		{
@@ -243,16 +260,20 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 //			settings.c_cflag |= CBAUDEX | B0;
 
 			if( cfsetispeed(&settings,BAUD_RATE) < 0 )
-				LOGE( "Can not set incomming baudrate for '%s': %s", PORT, strerror(errno));
+				LOGE( "Can not set incomming baudrate for '%s': %s", desc->path, strerror(errno));
 			if( cfsetospeed( &settings, BAUD_RATE) < 0 )
-				LOGW( "Can not set outgoing baudrate for '%s': %s", PORT, strerror(errno));
+				LOGW( "Can not set outgoing baudrate for '%s': %s", desc->path, strerror(errno));
 
+			// block read() until this many bytes are received
+			settings.c_cc[VMIN] = 0;
+			// block read() until there are no bytes for this many tenths of a second
+			settings.c_cc[VTIME] = 0;
 
 			if( tcsetattr(priv->fd,TCSANOW,&settings) < 0 )
-				LOGW( "Can not set serial attributes for '%s': %s", PORT, strerror(errno));
+				LOGW( "Can not set serial attributes for '%s': %s", desc->path, strerror(errno));
 
 			if( tcflush(priv->fd,TCOFLUSH) < 0 )
-				LOGW( "Can not flush termios '%s': %s", PORT, strerror(errno));
+				LOGW( "Can not flush termios '%s': %s", desc->path, strerror(errno));
 		}
 
 #else // ! WIN32
@@ -264,7 +285,7 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 
 		if( ! GetCommState(priv->fh,&priv->settings) )
 		{
-			LOGW( "Can not get serial attributes for '%s': %s", PORT, strerror(errno));
+			LOGW( "Can not get serial attributes for '%s': %s", desc->path, strerror(errno));
 		}
 		else
 		{
@@ -278,7 +299,6 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 
 			if( ! SetCommState(priv->fh,&settings) )
 			{
-				LOGW( "Can not set serial attributes for '%s': %s", PORT, strerror(errno));
 			}
 		}
 
@@ -322,9 +342,12 @@ static ohmd_device* open_device(ohmd_driver* driver, ohmd_device_desc* desc)
 
 static void get_device_list(ohmd_driver* driver, ohmd_device_list* list)
 {
-	struct stat		 sb;
 	ohmd_device_desc	*desc;
 
+
+#ifndef WIN32
+
+	struct stat		 sb;
 
 	if( stat(PORT,&sb) >= 0 )
 	{
@@ -346,6 +369,31 @@ static void get_device_list(ohmd_driver* driver, ohmd_device_list* list)
 		}
 
 	}
+
+#else // ! WIN32
+
+	char lpTargetPath[256];
+
+	if( QueryDosDevice( PORT, lpTargetPath, sizeof(lpTargetPath)) > 0 )
+	{
+		desc= &list->devices[list->num_devices++];
+
+		strcpy( desc->driver, "OpenHMD Generic Serial Driver");
+		strcpy( desc->vendor, "OpenHMD");
+		strcpy( desc->product, "Serial Device");
+
+		strcpy( desc->path, PORT);
+
+		desc->device_class= OHMD_DEVICE_CLASS_HMD;
+		desc->device_flags= OHMD_DEVICE_FLAGS_ROTATIONAL_TRACKING;
+
+		desc->driver_ptr= driver;
+	}
+
+//	printf( "%s: %s\n", PORT, lpTargetPath);
+
+#endif // ! WIN32
+
 }
 
 static void destroy_driver(ohmd_driver* drv)
